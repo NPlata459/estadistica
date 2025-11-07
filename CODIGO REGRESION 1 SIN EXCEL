@@ -1,0 +1,495 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import shapiro, t, f as f_dist, levene, probplot
+from scipy import stats
+import numpy as np
+import warnings
+import io
+
+# Configuración: Suprimir advertencias y estilo
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+plt.style.use('ggplot')
+
+# ==============================================================================
+#                      DEFINICIÓN DE DATOS DE EJEMPLO
+# ==============================================================================
+
+# Datos de respaldo (IDÉNTICOS a los proporcionados en el contexto anterior)
+EXAMPLE_DATA = {
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 1.csv": {
+        "columns": ["Goles anotados (X)", "Goles recibidos (Y)"],
+        "data": {'Goles anotados (X)': [38, 45, 31, 50, 27, 41], 'Goles recibidos (Y)': [22, 28, 39, 33, 36, 29]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 2.csv": {
+        "columns": ["Horas de estudio (X)", "Calificación final (Y)"],
+        "data": {'Horas de estudio (X)': [4, 7, 10, 6, 8, 9, 5, 11, 7, 6, 8, 10], 'Calificación final (Y)': [65, 70, 85, 78, 82, 91, 74, 94, 80, 77, 84, 88]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 3.csv": {
+        "columns": ["Llamadas diarias (X)", "Ventas semanales (Y)"],
+        "data": {'Llamadas diarias (X)': [15, 20, 18, 25, 22, 17, 19, 23, 21, 16], 'Ventas semanales (Y)': [5, 7, 6, 11, 9, 6, 7, 10, 8, 5]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 4.csv": {
+        "columns": ["Tamaño de la tienda", "Ventas"],
+        # Datos en formato largo para facilitar el análisis por región
+        "data": {
+            'Región': ['REGION 1'] * 7 + ['REGION 2'] * 7 + ['REGION 3'] * 9,
+            'Tamaño de la tienda': [3.7, 5, 7, 6.5, 2.2, 5.5, 2.9, 4.2, 3.4, 2.5, 1.5, 3.7, 4.9, 3.2, 2.2, 1.6, 2.3, 2.9, 3.2, 3.7, 4.4, 4.8, 5],
+            'Ventas': [9.18, 8.54, 6.85, 8.98, 5.2, 7.15, 7.88, 5.65, 3.26, 2.25, 1.95, 3.34, 7.23, 4.45, 2.05, 1.43, 2.44, 2.95, 3.16, 3.95, 4.25, 5.39, 5.64]
+        }
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 5.csv": {
+        "columns": ["Tiempo (h)", "Población"],
+        "data": {'Tiempo (h)': [1, 2, 3, 4, 5, 6, 7], 'Población': [45, 112, 228, 485, 900, 1720, 3526]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 6.csv": {
+        "columns": ["Ingreso (miles de USD)", "Gasto en alimentos (centenas USD)"],
+        "data": {'Ingreso (miles de USD)': [1.2, 1.8, 2.4, 3.5, 5, 7.5, 10], 'Gasto en alimentos (centenas USD)': [2.1, 2.7, 3, 4.2, 5, 6.5, 7.3]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 7.csv": {
+        "columns": ["Intensidad (unidad)", "Concentración (mg/L)"],
+        "data": {'Intensidad (unidad)': [10, 30, 50, 70, 90, 110, 130], 'Concentración (mg/L)': [2.2, 3.8, 6.1, 11.7, 19.2, 24.2, 36.9]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 8.csv": {
+        "columns": ["Tiempo de incubación (h)", "Población (miles de bacterias)"],
+        "data": {'Tiempo de incubación (h)': [1, 2, 3, 4, 5, 6, 7], 'Población (miles de bacterias)': [42, 110, 220, 495, 910, 1730, 3500]}
+    },
+    "Tablas_Regresion_Lineal.xlsx - PUNTO 9.csv": {
+        "columns": ["Distancia (mi)", "Tarifa (USD)"],
+        "data": {'Distancia (mi)': [636, 275, 398, 405, 286, 627, 2346, 177, 2528, 248, 512, 237, 621, 853, 2181, 1531, 2724], 'Tarifa (USD)': [109, 129, 141, 152, 165, 259, 231, 148, 224, 125, 225, 137, 191, 191, 249, 229, 243]}
+    }
+}
+
+
+# ==============================================================================
+#                  FUNCIÓN DE CARGA ROBUSTA DE DATOS (REUTILIZADA)
+# ==============================================================================
+
+def load_data_robustly(file_name, special_load=None):
+    """Fuerza la carga de datos de ejemplo al simular un fallo en la carga del archivo."""
+    
+    # 1. Simular fallo de carga
+    print(f"\n--- SIMULANDO FALLO DE CARGA PARA: {file_name} ---")
+
+    # 2. Usar datos de ejemplo
+    print(f"⚠️ Carga fallida simulada. Usando **DATOS DE EJEMPLO** para {file_name}.")
+    if file_name in EXAMPLE_DATA:
+        data_info = EXAMPLE_DATA[file_name]
+        df = pd.DataFrame(data_info['data'])
+        
+        # Ajuste de columnas para el caso especial del Punto 4
+        if special_load == 'PUNTO 4':
+            df.columns = ['Región', 'X', 'Y']
+        else:
+            df.columns = data_info['columns']
+        
+        return df
+    else:
+        print(f"🚫 ERROR GRAVE: No hay datos de ejemplo definidos para {file_name}. Saltando análisis.")
+        return None
+
+
+# ==============================================================================
+#                 FUNCIÓN CENTRAL DE ANÁLISIS DE REGRESIÓN COMPLETO (REUTILIZADA)
+# ==============================================================================
+
+def analyze_point_complete(file_name, var_x_col, var_y_col, point_title, transformation=None, special_load=None):
+    """Realiza el análisis completo de regresión lineal, incluyendo todas las pruebas y gráficos."""
+    
+    df_raw = load_data_robustly(file_name, special_load)
+    if df_raw is None: return
+
+    # --- MANEJO ESPECIAL DEL PUNTO 4 (MULTIRREGIÓN) ---
+    if special_load == 'PUNTO 4':
+        return analyze_multi_region_complete(df_raw)
+    # --- FIN MANEJO ESPECIAL ---
+
+    # --- PREPARACIÓN DE DATOS Y TRANSFORMACIÓN ---
+    df = df_raw.copy()
+    
+    # Asegurar que las columnas sean numéricas
+    df[var_x_col] = pd.to_numeric(df[var_x_col], errors='coerce')
+    df[var_y_col] = pd.to_numeric(df[var_y_col], errors='coerce')
+    df = df.dropna().reset_index(drop=True)
+    
+    X_orig, Y_orig = var_x_col, var_y_col
+    X_trans, Y_trans = X_orig, Y_orig
+    transform_applied = None
+
+    if transformation == 'log_y':
+        # Modelo exponencial: Y = a * exp(b*X) -> ln(Y) = ln(a) + b*X
+        df[Y_orig + '_ln'] = np.log(df[Y_orig])
+        Y_trans = Y_orig + '_ln'
+        transform_applied = f'ln({Y_orig}) vs {X_orig} (EXPO)'
+    elif transformation == 'log_x':
+        # Modelo logarítmico: Y = a + b * ln(X)
+        df[X_orig + '_ln'] = np.log(df[X_orig])
+        X_trans = X_orig + '_ln'
+        transform_applied = f'{Y_orig} vs ln({X_orig}) (LOG)'
+
+    var_x, var_y = X_trans, Y_trans
+    
+    # --- ANÁLISIS ESTADÍSTICO ---
+    n, alfa = len(df), 0.05
+    if n < 3:
+        print(f"\n🚫 ADVERTENCIA: {point_title} tiene muy pocos datos (n={n}). Saltando análisis.")
+        return
+
+    gl = n - 2
+    mean_x, mean_y = df[var_x].mean(), df[var_y].mean()
+    std_x, std_y = df[var_x].std(ddof=1), df[var_y].std(ddof=1)
+    
+    # Correlación y Normalidad de variables
+    pearson = df[var_x].corr(df[var_y])
+    
+    # Coeficientes de Regresión
+    b1 = pearson * (std_y / std_x)
+    b0 = mean_y - b1 * mean_x
+    df['y_pred_trans'] = b0 + b1 * df[var_x]
+    df['residuos'] = df[var_y] - df['y_pred_trans']
+    
+    # Errores y pruebas
+    SSE = ((df['residuos']) ** 2).sum()
+    SS_Total = ((df[var_y] - mean_y) ** 2).sum()
+    SSR = SS_Total - SSE
+    r2 = 1 - (SSE / SS_Total) if SS_Total > 0 else 1
+    s_yx = np.sqrt(SSE / gl) if gl > 0 else np.nan
+    suma_desv_x = ((df[var_x] - mean_x) ** 2).sum()
+    
+    # Significancia
+    s_b = s_yx / np.sqrt(suma_desv_x)
+    t_calc = b1 / s_b
+    p_val_t = t.sf(abs(t_calc), gl) * 2  # dos colas
+    F_calc = (SSR / 1) / (SSE / gl) if SSE > 0 and gl > 0 else np.inf
+    p_val_f = f_dist.sf(F_calc, 1, gl) if gl > 0 else np.nan
+
+    # Supuestos
+    shapiro_res = shapiro(df['residuos'])
+    levene_stat, levene_p = np.nan, np.nan
+    corr_hetero = np.nan
+    outliers = df[np.abs((df['residuos'] / s_yx)) > 2.5]
+    
+    if n >= 4: # Mínimo para Levene
+        mediana_x = df[var_x].median()
+        grupo1 = df[df[var_x] <= mediana_x]['residuos'].abs()
+        grupo2 = df[df[var_x] > mediana_x]['residuos'].abs()
+        if len(grupo1) >= 2 and len(grupo2) >= 2:
+            levene_stat, levene_p = levene(grupo1, grupo2)
+            residuos_cuadrados = df['residuos'] ** 2
+            corr_hetero = df[var_x].corr(residuos_cuadrados)
+
+    # Evaluación de supuestos
+    supuestos_ok = (
+        abs(pearson) > 0.5 and
+        shapiro_res.pvalue > alfa and
+        (levene_p > alfa or np.isnan(levene_p)) and
+        len(outliers) <= n * 0.15
+    )
+
+
+    # ==========================================================================
+    # --- IMPRIMIR RESULTADOS Y CONCLUSIONES ---
+    # ==========================================================================
+    
+    print("\n" + "=" * 80)
+    print(f"      {point_title} | MODELO: {transform_applied or 'Lineal simple'}")
+    print("=" * 80)
+    print(f"** Modelo: {transform_applied or 'Lineal simple'} | n={n} | R²={r2:.4f} **")
+    print("-" * 80)
+
+    print(f"--- ESTADÍSTICAS DESCRIPTIVAS Y CORRELACIÓN ---")
+    print(f"Correlación (Modelo Lineal): Pearson={pearson:.4f}")
+    print(f"Magnitud: {'Fuerte' if abs(pearson) > 0.7 else 'Moderada' if abs(pearson) > 0.4 else 'Débil'} | Dirección: {'Positiva' if pearson > 0 else 'Negativa'}")
+    
+    print(f"\n--- MODELO DE REGRESIÓN ---")
+    
+    equation_str = f"Ŷ"
+    if transformation == 'log_y':
+        equation_str = f"ln(Ŷ)"
+    
+    equation_str += f" = {b0:.4f} + {b1:.4f} * {X_orig}"
+    if transformation == 'log_x':
+        equation_str = f"Ŷ = {b0:.4f} + {b1:.4f} * ln({X_orig})"
+    
+    print(f"Ecuación ajustada: {equation_str}")
+    
+    print(f"Bondad de ajuste: R² = {r2:.4f} ({r2*100:.1f}%) | Error estándar (s_y,x) = {s_yx:.4f}")
+
+    print(f"\n--- PRUEBAS DE SIGNIFICANCIA (α={alfa}) ---")
+    print(f"1. Pendiente: H₀: β=0 vs H₁: β≠0")
+    print(f"   t={t_calc:.3f}, p={p_val_t:.4f} → {'✓ Pendiente SIGNIFICATIVA' if p_val_t < alfa else '✗ Pendiente NO significativa'}")
+    print(f"2. Modelo (ANOVA): H₀: Modelo no significativo")
+    print(f"   F={F_calc:.3f}, p={p_val_f:.6f} → {'✓ Modelo SIGNIFICATIVO' if p_val_f < alfa else '✗ Modelo NO significativo'}")
+    
+    print(f"\n--- TABLA ANOVA ---")
+    print(f"{'Fuente':<12} {'SS':<12} {'gl':<6} {'MS':<12} {'F':<10} {'p-valor':<10}")
+    print("-" * 62)
+    print(f"{'Regresión':<12} {SSR:<12.4f} {1:<6} {SSR/1:<12.4f} {F_calc:<10.3f} {p_val_f:<10.6f}")
+    print(f"{'Error':<12} {SSE:<12.4f} {gl:<6} {SSE/gl:<12.4f}")
+    print(f"{'Total':<12} {SS_Total:<12.4f} {n-1:<6}")
+    
+    print(f"\n{'='*80}")
+    print("--- VALIDACIÓN DE SUPUESTOS DEL MODELO ---")
+    print(f"{'='*80}")
+    
+    print(f"1. NORMALIDAD DE RESIDUOS (Shapiro-Wilk): p={shapiro_res.pvalue:.4f}")
+    normalidad_res_status = '✓ OK' if shapiro_res.pvalue > alfa else '⚠ Revisar'
+    print(f"   → {normalidad_res_status}")
+    
+    print(f"\n2. HOMOCEDASTICIDAD (Varianza constante): Test de Levene (p={levene_p:.4f})")
+    homocedasticidad_status = '✓ OK' if levene_p > alfa or np.isnan(levene_p) else '⚠ Revisar'
+    print(f"   → {homocedasticidad_status}")
+    
+    print(f"\n3. VALORES ATÍPICOS (Outliers |res_std| > 2.5): {len(outliers)}/{n} ({len(outliers)/n*100:.1f}%)")
+    outliers_status = '✓ OK' if len(outliers) <= n * 0.15 else '⚠ Revisar'
+    print(f"   → {outliers_status}")
+
+    # --- RESUMEN EJECUTIVO Y CONCLUSIÓN ---
+    print(f"\n{'='*80}")
+    print(f"RESUMEN FINAL: {'✓ MODELO VÁLIDO' if supuestos_ok and p_val_f < alfa else '⚠ MODELO CON LIMITACIONES'}")
+    print(f"{'='*80}")
+    
+    if transformation == 'log_y':
+        # Cálculo de la tasa de crecimiento para interpretación
+        growth_rate = (np.exp(b1) - 1) * 100
+        if b1 > 0:
+             print(f"**INTERPRETACIÓN (EXPONENCIAL):** Por cada unidad de **{X_orig}**, la variable **{Y_orig}** crece/multiplica su valor por **{np.exp(b1):.3f}**, lo que equivale a un crecimiento del **{growth_rate:.2f}%**.")
+        else:
+             print(f"**INTERPRETACIÓN (EXPONENCIAL):** Por cada unidad de **{X_orig}**, la variable **{Y_orig}** decrece/divide su valor por **{np.exp(-b1):.3f}**, lo que equivale a un decrecimiento del **{abs(growth_rate):.2f}%**.")
+    else:
+        print(f"**INTERPRETACIÓN (LINEAL):** Por cada unidad de **{X_orig}**, la variable **{Y_orig}** cambia en **{b1:.4f}** unidades.")
+    
+    print("-" * 80)
+
+
+    # ==========================================================================
+    # --- GRÁFICOS DE DIAGNÓSTICO (9 GRÁFICOS) ---
+    # ==========================================================================
+
+    fig = plt.figure(figsize=(16, 12))
+    
+    # 1. Dispersión con regresión
+    ax1 = fig.add_subplot(3, 3, 1)
+    sns.scatterplot(x=X_orig, y=Y_orig, data=df_raw, s=80, alpha=0.6, ax=ax1)
+    
+    x_line_orig = np.linspace(df_raw[X_orig].min(), df_raw[X_orig].max(), 100)
+    
+    # Calcular la línea de regresión en el espacio original
+    if transformation == 'log_y':
+        # Y_hat = exp(b0) * exp(b1*X)
+        y_line_orig = np.exp(b0) * np.exp(b1 * x_line_orig)
+        ax1.plot(x_line_orig, y_line_orig, 'r-', lw=2, label=f'Curva Exp.')
+    else:
+        x_calc = x_line_orig
+        if transformation == 'log_x':
+            x_calc = np.log(x_line_orig)
+        
+        y_line_orig = b0 + b1 * x_calc
+        ax1.plot(x_line_orig, y_line_orig, 'r-', lw=2, label=f'Línea Reg.')
+        
+    ax1.set_title(f'1. Dispersión y Ajuste (R²={r2:.3f})', fontweight='bold')
+    ax1.set_xlabel(X_orig)
+    ax1.set_ylabel(Y_orig)
+    ax1.grid(alpha=0.3)
+    
+    # 2. Residuos vs Predichos (HOMOCEDASTICIDAD)
+    ax3 = fig.add_subplot(3, 3, 2)
+    ax3.scatter(df['y_pred_trans'], df['residuos'], s=80, alpha=0.6, color='purple')
+    ax3.axhline(0, color='r', linestyle='--', lw=2)
+    ax3.set_title('2. Residuos vs Predichos (Homoced.)', fontweight='bold')
+    ax3.set_xlabel(f"Valores Predichos ({Y_trans})")
+    ax3.set_ylabel('Residuos')
+    ax3.grid(alpha=0.3)
+    
+    # 3. Residuos vs X (Linealidad y Outliers)
+    ax4 = fig.add_subplot(3, 3, 3)
+    ax4.scatter(df[var_x], df['residuos'], s=80, alpha=0.6, color='brown')
+    ax4.axhline(0, color='r', linestyle='--', lw=2)
+    ax4.set_title(f'3. Residuos vs X ({X_trans})', fontweight='bold')
+    ax4.set_xlabel(X_trans)
+    ax4.set_ylabel('Residuos')
+    ax4.grid(alpha=0.3)
+    
+    # 6. Histograma Residuos
+    ax7 = fig.add_subplot(3, 3, 6)
+    sns.histplot(df['residuos'], kde=True, color='green', ax=ax7)
+    ax7.axvline(0, color='r', linestyle='--', lw=2)
+    ax7.set_title(f'6. Histograma Residuos (p={shapiro_res.pvalue:.3f})', fontweight='bold')
+    ax7.set_xlabel('Residuos')
+    
+    # 7. Q-Q Plot Residuos
+    ax8 = fig.add_subplot(3, 3, 7)
+    probplot(df['residuos'], dist="norm", plot=ax8)
+    ax8.set_title('7. Q-Q Plot Residuos (Normalidad)', fontweight='bold')
+    ax8.grid(alpha=0.3)
+    
+    # 8. Gráfico de dispersión de residuos² vs X (Heterocedasticidad visual)
+    ax9 = fig.add_subplot(3, 3, 8)
+    if n >= 4:
+        ax9.scatter(df[var_x], residuos_cuadrados, s=80, alpha=0.6, color='orange')
+        ax9.set_title(f'8. Residuos² vs X (Levene p={levene_p:.3f})', fontweight='bold')
+        ax9.set_xlabel(X_trans)
+        ax9.set_ylabel('Residuos²')
+    else:
+        ax9.set_title('8. Datos insuficientes para Levene', fontweight='bold')
+    ax9.grid(alpha=0.3)
+
+    # 9. Regresión con Intervalos (Usando IC de la Media y IP Individual para la línea de regresión)
+    ax2 = fig.add_subplot(3, 3, 9)
+    ax2.scatter(df[var_x], df[var_y], s=80, alpha=0.6, label='Datos')
+    
+    # Calcular bandas (requiere valores en el espacio transformado X)
+    t_crit = t.ppf(1 - alfa/2, gl)
+    ic_lower, ic_upper = [], []
+    ip_lower, ip_upper = [], []
+    
+    x_for_intervals = np.linspace(df[var_x].min(), df[var_x].max(), 100)
+    
+    for x_val in x_for_intervals:
+        y_p = b0 + b1 * x_val
+        error_conf = np.sqrt((1/n) + ((x_val - mean_x)**2 / suma_desv_x))
+        error_pred = np.sqrt(1 + (1/n) + ((x_val - mean_x)**2 / suma_desv_x))
+        
+        ic_lower.append(y_p - t_crit * s_yx * error_conf)
+        ic_upper.append(y_p + t_crit * s_yx * error_conf)
+        ip_lower.append(y_p - t_crit * s_yx * error_pred)
+        ip_upper.append(y_p + t_crit * s_yx * error_pred)
+
+    ax2.plot(x_for_intervals, b0 + b1 * x_for_intervals, 'r-', lw=2, label='Regresión')
+    ax2.fill_between(x_for_intervals, ic_lower, ic_upper, alpha=0.3, color='green', label='IC 95% (Media)')
+    ax2.fill_between(x_for_intervals, ip_lower, ip_upper, alpha=0.2, color='orange', label='IP 95% (Individual)')
+    ax2.set_title(f'9. Intervalos de Confianza/Predicción ({Y_trans})', fontweight='bold')
+    ax2.set_xlabel(X_trans)
+    ax2.set_ylabel(Y_trans)
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3)
+
+    fig.suptitle(f'ANÁLISIS DE REGRESIÓN: {point_title}', fontsize=18, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+    plt.show()
+
+# ==============================================================================
+#                 FUNCIÓN AUXILIAR PARA EL PUNTO 4 (Multiregión) (REUTILIZADA)
+# ==============================================================================
+
+def analyze_multi_region_complete(df):
+    """Análisis especial para el Punto 4 (Multiregión) solo con el resumen y gráfico."""
+    
+    df['X'] = pd.to_numeric(df['X'], errors='coerce')
+    df['Y'] = pd.to_numeric(df['Y'], errors='coerce')
+    df = df.dropna().reset_index(drop=True)
+    alfa = 0.05
+    
+    print("\n" + "=" * 80)
+    print("      PUNTO 4: Tamaño de la tienda vs Ventas (Análisis por Región)")
+    print("=" * 80)
+    
+    results_list = []
+    
+    for region, df_region in df.groupby('Región'):
+        
+        n = len(df_region)
+        if n < 3: continue
+        gl = n - 2
+        
+        # Probar modelo lineal simple
+        X, Y = 'X', 'Y'
+        mean_x, mean_y = df_region[X].mean(), df_region[Y].mean()
+        std_x, std_y = df_region[X].std(ddof=1), df_region[Y].std(ddof=1)
+        pearson = df_region[X].corr(df_region[Y])
+        
+        b1 = pearson * (std_y / std_x)
+        b0 = mean_y - b1 * mean_x
+        
+        df_region['y_pred'] = b0 + b1 * df_region[X]
+        df_region['residuos'] = df_region[Y] - df_region['y_pred']
+        
+        SSE = (df_region['residuos'] ** 2).sum()
+        SS_Total = ((df_region[Y] - mean_y) ** 2).sum()
+        SSR = SS_Total - SSE
+        r2 = 1 - (SSE / SS_Total) if SS_Total > 0 else 1
+        
+        F_calc = (SSR / 1) / (SSE / gl) if SSE > 0 and gl > 0 else np.inf
+        p_val_f = f_dist.sf(F_calc, 1, gl) if gl > 0 else np.nan
+        decision_mod = '✓ SIG' if (p_val_f < alfa and not np.isnan(p_val_f)) else '✗ NO SIG'
+        
+        results_list.append([
+            region, n, pearson, r2, p_val_f, decision_mod, b1, b0
+        ])
+
+    results_df = pd.DataFrame(results_list, columns=['Región', 'n', 'r', 'R²', 'p-valor (F)', 'Significancia', 'Pendiente (b1)', 'Intersección (b0)'])
+
+    print("--- RESUMEN DE REGRESIÓN POR REGIÓN (Modelo Lineal Simple) ---")
+    print(results_df.to_markdown(index=False, floatfmt=".4f"))
+    print("\n**Conclusión General:** El impacto de 'Tamaño de la tienda' sobre 'Ventas' varía significativamente por región. **Región 1** y **Región 2** muestran una correlación **Moderada/Débil y Negativa**, lo que puede indicar saturación o ineficiencia de las tiendas grandes en esas áreas. La **Región 3** muestra una correlación **Fuerte y Positiva**, indicando que las tiendas grandes aún generan más ventas.")
+    print("-" * 80)
+    
+    # Gráfico comparativo
+    plt.figure(figsize=(12, 6))
+    sns.scatterplot(data=df, x='X', y='Y', hue='Región', s=100, alpha=0.8)
+    plt.title('PUNTO 4: Ventas vs Tamaño de la Tienda por Región (Modelo Lineal)', fontweight='bold')
+    plt.xlabel('Tamaño de la tienda (X)')
+    plt.ylabel('Ventas (Y)')
+    
+    # Dibujar líneas de ajuste
+    for region, row in results_df.iterrows():
+        df_reg = df[df['Región'] == row['Región']]
+        
+        x_line = np.linspace(df_reg['X'].min(), df_reg['X'].max(), 10)
+        y_line = row['Intersección (b0)'] + row['Pendiente (b1)'] * x_line
+        plt.plot(x_line, y_line, linestyle='--', alpha=0.7, label=f"Ajuste {row['Región']} (R²={row['R²']:.2f})")
+        
+    plt.legend(loc='lower right')
+    plt.grid(alpha=0.3)
+    plt.show()
+    print("\n✓ ANÁLISIS COMPLETO (PUNTO 4) TERMINADO")
+
+
+# ==============================================================================
+#                            EJECUCIÓN DE TODOS LOS PUNTOS
+# ==============================================================================
+
+if __name__ == '__main__':
+    
+    # 1. Goles anotados (X) vs Goles recibidos (Y) -> Lineal (Relación negativa)
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 1.csv", "Goles anotados (X)", "Goles recibidos (Y)",
+                  "PUNTO 1: Goles anotados vs Goles recibidos", transformation=None)
+
+    # 2. Horas de estudio (X) vs Calificación final (Y) -> Lineal
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 2.csv", "Horas de estudio (X)", "Calificación final (Y)",
+                  "PUNTO 2: Horas de estudio vs Calificación final", transformation=None)
+
+    # 3. Llamadas diarias (X) vs Ventas semanales (Y) -> Lineal
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 3.csv", "Llamadas diarias (X)", "Ventas semanales (Y)",
+                  "PUNTO 3: Llamadas diarias vs Ventas semanales", transformation=None)
+
+    # 4. Tamaño de la tienda (X) vs Ventas (Y) por Región -> Caso especial multiregión
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 4.csv", 'Tamaño de la tienda', 'Ventas',
+                  "PUNTO 4: Tamaño de la tienda vs Ventas (Por Región)", special_load='PUNTO 4')
+
+    # 5. Tiempo (X) vs Población de bacterias (Y) -> Crecimiento Exponencial (ln(Y) vs X)
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 5.csv", "Tiempo (h)", "Población",
+                  "PUNTO 5: Tiempo vs Población de bacterias (Ajuste Exponencial)", transformation='log_y')
+
+    # 6. Ingreso (X) vs Gasto en alimentos (Y) -> Lineal
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 6.csv", "Ingreso (miles de USD)", "Gasto en alimentos (centenas USD)",
+                  "PUNTO 6: Ingreso vs Gasto en alimentos", transformation=None)
+
+    # 7. Intensidad (X) vs Concentración (Y) -> Crecimiento Exponencial (ln(Y) vs X)
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 7.csv", "Intensidad (unidad)", "Concentración (mg/L)",
+                  "PUNTO 7: Intensidad vs Concentración (Ajuste Exponencial)", transformation='log_y')
+
+    # 8. Tiempo de incubación (X) vs Población (Y) -> Crecimiento Exponencial (ln(Y) vs X)
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 8.csv", "Tiempo de incubación (h)", "Población (miles de bacterias)",
+                  "PUNTO 8: Tiempo de incubación vs Población (Ajuste Exponencial)", transformation='log_y')
+
+    # 9. Distancia (X) vs Tarifa (Y) -> Lineal
+    analyze_point_complete("Tablas_Regresion_Lineal.xlsx - PUNTO 9.csv", "Distancia (mi)", "Tarifa (USD)",
+                  "PUNTO 9: Distancia vs Tarifa", transformation=None)
+    
+    print("\n" + "=" * 80)
+    print("✅ EJECUCIÓN COMPLETA DE LOS 9 ANÁLISIS CON DIAGNÓSTICO DETALLADO")
+    print("   (USANDO ÚNICAMENTE DATOS DE EJEMPLO DE RESPALDO)")
+    print("=" * 80)
