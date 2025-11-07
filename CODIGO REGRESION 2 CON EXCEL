@@ -1,0 +1,453 @@
+import os
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import shapiro, t as t_dist, f as f_dist, levene
+from scipy import stats
+
+# Configuración visual
+plt.rcParams.update({"figure.max_open_warning": 0})
+sns.set(style="whitegrid")
+
+# Parámetros
+ALFA = 0.05
+EXCEL_FILE = "Tablas_Regresion_Lineal.xlsx"
+
+# --- Cargar hojas del Excel (1..9) o crear datos respaldo ---
+sheets = {}
+if os.path.exists(EXCEL_FILE):
+    xls = pd.ExcelFile(EXCEL_FILE)
+    sheet_names = xls.sheet_names[:9]
+    for i, name in enumerate(sheet_names, start=1):
+        sheets[i] = pd.read_excel(xls, sheet_name=name)
+        print(f"Hoja {i} leída: '{name}', shape={sheets[i].shape}")
+else:
+    print("No se encontró el Excel. Generando datos de respaldo para 9 puntos.")
+    # Datos de respaldo (estructuras numéricas)
+    sheets[1] = pd.DataFrame({
+        "Representante": ['Brian','Carlos','Carol','Greg','Jeff','Mark','Meryl','Mike','Ray','Rich','Ron','Sal','Soni','Susan','Tom'],
+        "Llamadas": [96,40,104,128,164,76,72,80,36,84,180,132,120,44,84],
+        "Copiadoras": [41,41,51,60,61,29,39,50,28,43,70,56,45,31,30]
+    })
+    sheets[2] = pd.DataFrame({"X":[4,7,10,6,8,9,5,11,7,6,8,10],"Y":[65,70,85,78,82,91,74,94,80,77,84,88]})
+    sheets[3] = pd.DataFrame({"X":[15,20,18,25,22,17,19,23,21,16],"Y":[5,7,6,11,9,6,7,10,8,5]})
+    sheets[4] = {"R1": pd.DataFrame({"X":[3.7,5.0,7.0,6.5,2.2,5.5,2.9],"Y":[9.18,8.54,6.85,8.98,5.20,7.15,7.88]}),
+                 "R2": pd.DataFrame({"X":[4.2,3.4,2.5,1.5,3.7,4.9,3.2],"Y":[5.65,3.26,2.25,1.95,3.34,7.23,4.45]}),
+                 "R3": pd.DataFrame({"X":[2.2,1.6,2.3,2.9,3.2,3.7,4.4,4.8,5.0],"Y":[2.05,1.43,2.44,2.95,3.16,3.95,4.25,5.39,5.64]})}
+    sheets[5] = pd.DataFrame({"X":[1,2,3,4,5,6,7],"Y":[45,112,228,485,900,1720,3526]})
+    sheets[6] = pd.DataFrame({"X":[1.2,1.8,2.4,3.5,5.0,7.5,10.0],"Y":[2.1,2.7,3.0,4.2,5.0,6.5,7.3]})
+    sheets[7] = pd.DataFrame({"X":[10,30,50,70,90,110,130],"Y":[2.2,3.8,6.1,11.7,19.2,24.2,36.9]})
+    sheets[8] = pd.DataFrame({"X":[1,2,3,4,5,6,7],"Y":[42,110,220,495,910,1730,3500]})
+    sheets[9] = pd.DataFrame({"Distancia":[636,275,398,405,286,627,2346,177,2528,248,512,248,248,237,621,853,2181,1531,2724,999],
+                              "Tarifa":[109,129,141,152,165,259,231,148,224,125,225,124,125,137,191,191,249,229,243,219]})
+
+# --- Funciones auxiliares (mismos cálculos que en tu ejemplo) ---
+def describir_y_ajustar(df, x_col, y_col, etiqueta):
+    # Preparar df: seleccionar columnas numéricas si nombres no coinciden
+    if x_col not in df.columns or y_col not in df.columns:
+        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(num_cols) >= 2:
+            x_col, y_col = num_cols[0], num_cols[1]
+        else:
+            raise ValueError(f"No hay suficientes columnas numéricas en {etiqueta}")
+
+    data = df[[x_col, y_col]].dropna().copy()
+    data.columns = [x_col, y_col]
+    n = len(data)
+
+    # --- INICIO DE LA MODIFICACIÓN ---
+    if n < 3:
+        print(f"Advertencia: No hay suficientes datos ({n} observaciones) para realizar un análisis de regresión completo para {etiqueta}. Se omite el análisis detallado.")
+        # Retornar un diccionario con NaNs para indicar que no se pudo completar el análisis
+        return {
+            "etiqueta": etiqueta,
+            "n": n,
+            "b0": np.nan, "b1": np.nan, "R2": np.nan,
+            "p_b1": np.nan, "F": np.nan, "p_F": np.nan,
+            "levene_p": np.nan, "outliers_count": np.nan
+        }
+    # --- FIN DE LA MODIFICACIÓN ---
+
+    # Estadísticas descriptivas
+    mean_x = data[x_col].mean()
+    mean_y = data[y_col].mean()
+    std_x = data[x_col].std(ddof=1)
+    std_y = data[y_col].std(ddof=1)
+    min_x, max_x = data[x_col].min(), data[x_col].max()
+    min_y, max_y = data[y_col].min(), data[y_col].max()
+
+    # Normalidad
+    sh_x = shapiro(data[x_col])
+    sh_y = shapiro(data[y_col])
+
+    # Correlaciones
+    pearson_r = data[x_col].corr(data[y_col])
+    spearman_r = data[x_col].corr(data[y_col], method='spearman')
+
+    # Prueba t para correlación (two-sided)
+    gl = n - 2
+    t_corr = pearson_r * math.sqrt(n - 2) / math.sqrt(1 - pearson_r**2) if abs(pearson_r) < 1 else np.inf
+    p_corr = t_dist.sf(abs(t_corr), gl) * 2
+
+    # Estimadores por fórmula (como en tu código)
+    b1 = pearson_r * (std_y / std_x)
+    b0 = mean_y - b1 * mean_x
+
+    data['y_pred'] = b0 + b1 * data[x_col]
+    data['residuos'] = data[y_col] - data['y_pred']
+
+    SSE = ((data[y_col] - data['y_pred']) ** 2).sum()
+    SS_Total = ((data[y_col] - mean_y) ** 2).sum()
+    SSR = SS_Total - SSE
+    s_yx = math.sqrt(SSE / (n - 2)) if n > 2 else float('nan')
+    suma_desv_x = ((data[x_col] - mean_x) ** 2).sum()
+    s_b = s_yx / math.sqrt(suma_desv_x) if suma_desv_x > 0 else float('nan')
+    r2 = 1 - (SSE / SS_Total) if SS_Total > 0 else float('nan')
+
+    # t y p para pendiente
+    t_calc = b1 / s_b if s_b and not np.isnan(s_b) else float('nan')
+    p_val_t = t_dist.sf(abs(t_calc), gl) * 2 if not np.isnan(t_calc) else float('nan')
+    t_crit_pend = t_dist.ppf(1 - ALFA/2, gl)
+
+    # F y p para ANOVA
+    F_calc = (SSR / 1) / (SSE / gl) if (gl > 0 and SSE > 0) else float('nan')
+    p_val_f = f_dist.sf(F_calc, 1, gl) if not np.isnan(F_calc) else float('nan')
+
+    # ANOVA tabla (formato igual al ejemplo)
+    # Homocedasticidad: Levene (dividir por mediana en X)
+    mediana_x = data[x_col].median()
+    grupo1 = data[data[x_col] <= mediana_x]['residuos'].abs()
+    grupo2 = data[data[x_col] > mediana_x]['residuos'].abs()
+    if len(grupo1) > 0 and len(grupo2) > 0:
+        levene_stat, levene_p = levene(grupo1, grupo2)
+    else:
+        levene_stat, levene_p = float('nan'), float('nan')
+
+    # Correlación entre residuos² y X (indicador heterocedasticidad)
+    residuos_cuadrados = data['residuos'] ** 2
+    corr_hetero = data[x_col].corr(residuos_cuadrados)
+
+    # Normalidad residuos
+    sh_res = shapiro(data['residuos']) if n >= 3 else (float('nan'), float('nan'))
+
+    # Residuos estandarizados (usar s_yx)
+    data['res_std'] = data['residuos'] / s_yx if s_yx and not np.isnan(s_yx) else np.nan
+    outliers = data[np.abs(data['res_std']) > 2.5]
+
+    # Intervalos: elegir 4 valores representativos de X: min, media (redondeada), mediana, max
+    x_ejemplos = [int(min_x), int(round(mean_x)), int(data[x_col].median()), int(max_x)]
+    t_crit = t_dist.ppf(1 - ALFA/2, gl) if gl > 0 else float('nan')
+    ic_pred_list = []
+    for x_val in x_ejemplos:
+        y_pred = b0 + b1 * x_val
+        # error para la media
+        error_conf = math.sqrt((1/n) + ((x_val - mean_x)**2 / suma_desv_x)) if suma_desv_x > 0 else float('nan')
+        margen_conf = t_crit * s_yx * error_conf if not np.isnan(error_conf) else float('nan')
+        ic_inf, ic_sup = y_pred - margen_conf, y_pred + margen_conf
+        # error para predicción individual
+        error_pred = math.sqrt(1 + (1/n) + ((x_val - mean_x)**2 / suma_desv_x)) if suma_desv_x > 0 else float('nan')
+        margen_pred = t_crit * s_yx * error_pred if not np.isnan(error_pred) else float('nan')
+        ip_inf, ip_sup = y_pred - margen_pred, y_pred + margen_pred
+        ic_pred_list.append((x_val, y_pred, (ic_inf, ic_sup), (ip_inf, ip_sup)))
+
+    # Gráficos: 9 subplots (igual al ejemplo)
+    fig = plt.figure(figsize=(16, 12))
+    # 1. Dispersión con regresión
+    ax1 = plt.subplot(3, 3, 1)
+    sns.scatterplot(x=data[x_col], y=data[y_col], s=80, alpha=0.6)
+    x_line = np.linspace(min_x, max_x, 200)
+    y_line = b0 + b1 * x_line
+    ax1.plot(x_line, y_line, 'r-', lw=2, label=f'Ŷ = {b0:.2f} + {b1:.2f}X')
+    ax1.set_title(f'Regresión Lineal (R²={r2:.3f})', fontweight='bold')
+    ax1.set_xlabel(x_col); ax1.set_ylabel(y_col)
+    ax1.legend()
+    ax1.grid(alpha=0.3)
+
+    # 2. Regresión con intervalos
+    ax2 = plt.subplot(3, 3, 2)
+    ax2.scatter(data[x_col], data[y_col], s=80, alpha=0.6, label='Datos')
+
+    # Define x_line and y_line for plotting regression on the TRANSFORMED scale
+    x_plot_transformed = np.linspace(data[x_col].min(), data[x_col].max(), 100)
+    y_plot_transformed = b0 + b1 * x_plot_transformed
+    ax2.plot(x_plot_transformed, y_plot_transformed, 'r-', lw=2, label='Regresión')
+
+
+    # bandas IC e IP
+    ic_lower, ic_upper, ip_lower, ip_upper = [], [], [], []
+    for xv in x_plot_transformed:
+        # evitar division por cero
+        if suma_desv_x > 0 and not np.isnan(s_yx):
+            y_p = b0 + b1 * xv
+            e_conf = math.sqrt((1/n) + ((xv - mean_x)**2 / suma_desv_x))
+            e_pred = math.sqrt(1 + (1/n) + ((xv - mean_x)**2 / suma_desv_x))
+            ic_lower.append(y_p - t_crit * s_yx * e_conf)
+            ic_upper.append(y_p + t_crit * s_yx * e_conf)
+            ip_lower.append(y_p - t_crit * s_yx * e_pred)
+            ip_upper.append(y_p + t_crit * s_yx * e_pred)
+        else:
+            ic_lower.append(np.nan); ic_upper.append(np.nan); ip_lower.append(np.nan); ip_upper.append(np.nan)
+    ax2.fill_between(x_plot_transformed, ic_lower, ic_upper, alpha=0.3, color='green', label='IC 95%')
+    ax2.fill_between(x_plot_transformed, ip_lower, ip_upper, alpha=0.2, color='orange', label='IP 95%')
+    ax2.set_title('Intervalos Confianza/Predicción', fontweight='bold')
+    ax2.set_xlabel(x_col); ax2.set_ylabel(y_col)
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3)
+
+    # 3. Residuos vs Predichos
+    ax3 = plt.subplot(3, 3, 3)
+    ax3.scatter(data['y_pred'], data['residuos'], s=80, alpha=0.6, color='purple')
+    ax3.axhline(0, color='r', linestyle='--', lw=2)
+    ax3.set_title('Residuos vs Predichos (Homoced.)', fontweight='bold')
+    ax3.set_xlabel('Valores Predichos'); ax3.set_ylabel('Residuos')
+    ax3.grid(alpha=0.3)
+
+    # 4. Residuos vs X
+    ax4 = plt.subplot(3, 3, 4)
+    ax4.scatter(data[x_col], data['residuos'], s=80, alpha=0.6, color='brown')
+    ax4.axhline(0, color='r', linestyle='--', lw=2)
+    ax4.set_title('Residuos vs X (Linealidad)', fontweight='bold')
+    ax4.set_xlabel(x_col); ax4.set_ylabel('Residuos')
+    ax4.grid(alpha=0.3)
+
+    # 5. Histograma X
+    ax5 = plt.subplot(3, 3, 5)
+    sns.histplot(data[x_col], kde=True, ax=ax5)
+    ax5.set_title(f"Distribución X (p={sh_x.pvalue:.3f})", fontweight='bold')
+    ax5.set_xlabel(x_col)
+
+    # 6. Histograma Y
+    ax6 = plt.subplot(3, 3, 6)
+    sns.histplot(data[y_col], kde=True, ax=ax6)
+    ax6.set_title(f"Distribución Y (p={sh_y.pvalue:.3f})", fontweight='bold')
+    ax6.set_xlabel(y_col)
+
+    # 7. Histograma Residuos
+    ax7 = plt.subplot(3, 3, 7)
+    sns.histplot(data['residuos'], kde=True, ax=ax7, color='green')
+    ax7.axvline(0, color='r', linestyle='--', lw=2)
+    ax7.set_title(f"Histograma Residuos (p={sh_res.pvalue if hasattr(sh_res, 'pvalue') else np.nan:.3f})", fontweight='bold')
+    ax7.set_xlabel('Residuos')
+
+    # 8. Q-Q Plot Residuos
+    ax8 = plt.subplot(3, 3, 8)
+    stats.probplot(data['residuos'], dist="norm", plot=ax8)
+    ax8.set_title('Q-Q Plot Residuos (Normalidad)', fontweight='bold')
+    ax8.grid(alpha=0.3)
+
+    # 9. Residuos² vs X
+    ax9 = plt.subplot(3, 3, 9)
+    ax9.scatter(data[x_col], residuos_cuadrados, s=80, alpha=0.6, color='orange')
+    ax9.set_title(f"Residuos² vs X (r={corr_hetero:.3f})", fontweight='bold')
+    ax9.set_xlabel(x_col); ax9.set_ylabel('Residuos²')
+    ax9.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    # --- Mensajes y resumen (mismo estilo que tu código) ---
+    print("=" * 70)
+    print(f"        ANÁLISIS DE REGRESIÓN LINEAL - {etiqueta}")
+    print("=" * 70)
+    print(f"n={n} | α={ALFA} | X={x_col} | Y={y_col}\n")
+
+    print("--- ESTADÍSTICAS DESCRIPTIVAS Y CORRELACIÓN ---")
+    print(f"X: μ={mean_x:.2f}, σ={std_x:.2f}, rango=[{min_x}, {max_x}]")
+    print(f"Y: μ={mean_y:.2f}, σ={std_y:.2f}, rango=[{min_y}, {max_y}]")
+    print(f"\nNormalidad (Shapiro-Wilk):")
+    print(f"  X: p={sh_x.pvalue:.4f} {'✓ Normal' if sh_x.pvalue > ALFA else '✗ No normal'}")
+    print(f"  Y: p={sh_y.pvalue:.4f} {'✓ Normal' if sh_y.pvalue > ALFA else '✗ No normal'}")
+    print(f"\nCorrelación: Pearson={pearson_r:.4f} | Spearman={spearman_r:.4f}")
+    print(f"Magnitud: {'Fuerte' if abs(pearson_r) > 0.7 else 'Moderada' if abs(pearson_r) > 0.4 else 'Débil'} | Dirección: {'Positiva' if pearson_r > 0 else 'Negativa'}")
+
+    print(f"\n--- PRUEBA DE CORRELACIÓN ---")
+    t_crit_corr = t_dist.ppf(1 - ALFA/2, gl) if gl > 0 else float('nan')
+    print(f"H₀: ρ=0 vs H₁: ρ≠0 | t={t_corr:.3f}, t_crit=±{t_crit_corr:.3f}, p={p_corr:.4f}")
+    print(f"Decisión: {'✓ Rechazar H₀ - Correlación SIGNIFICATIVA' if p_corr < ALFA else '✗ No rechazar H₀'}")
+
+    print(f"\n--- MODELO DE REGRESIÓN ---")
+    print(f"Ecuación: Ŷ = {b0:.4f} + {b1:.4f}X")
+    print(f"  b₀ (intersección): {b0:.4f}")
+    print(f"  b₁ (pendiente): {b1:.4f} → Por cada unidad de X, ΔY ≈ {b1:.4f}")
+    print(f"\nBondad de ajuste:")
+    print(f"  R² = {r2:.4f} ({r2*100:.1f}% variabilidad explicada)")
+    print(f"  Error estándar (s_y,x) = {s_yx:.4f}")
+
+    print(f"\n--- PRUEBAS DE SIGNIFICANCIA (α={ALFA}) ---")
+    print(f"1. Pendiente: H₀: β=0 vs H₁: β≠0")
+    print(f"   t={t_calc:.3f}, t_crit=±{t_crit_pend:.3f}, p={p_val_t:.4f}")
+    print(f"   → {'✓ Pendiente SIGNIFICATIVA' if p_val_t < ALFA else '✗ Pendiente NO significativa'}")
+    print(f"\n2. Modelo (ANOVA): H₀: modelo no significativo vs H₁: modelo significativo")
+    print(f"   F={F_calc:.3f}, p={p_val_f:.6f}")
+    print(f"   → {'✓ Modelo SIGNIFICATIVO' if p_val_f < ALFA else '✗ Modelo NO significativo'}")
+
+    # ANOVA tabla
+    print(f"\n--- TABLA ANOVA ---")
+    print(f"{'Fuente':<12} {'SS':<15} {'gl':<6} {'MS':<12} {'F':<10} {'p-valor':<10}")
+    print("-" * 70)
+    print(f"{'Regresión':<12} {SSR:<15.4f} {1:<6} {SSR/1 if 1>0 else np.nan:<12.4f} {F_calc:<10.3f} {p_val_f:<10.6f}")
+    print(f"{'Error':<12} {SSE:<15.4f} {gl:<6} {SSE/gl if gl>0 else np.nan:<12.4f}")
+    print(f"{'Total':<12} {SS_Total:<15.4f} {n-1:<6}")
+
+    print("\n" + "="*70)
+    print("--- VALIDACIÓN DE SUPUESTOS DEL MODELO ---")
+    print("="*70)
+
+    print("\n1. LINEALIDAD:")
+    print(f"   • Correlación: r={pearson_r:.4f}")
+    print(f"   • Revisar diagrama de dispersión para confirmar")
+    print(f"   → {'✓ Supuesto plausible' if abs(pearson_r) > 0.5 else '⚠ Revisar gráfico - correlación débil'}")
+
+    print("\n2. INDEPENDENCIA:")
+    print("   • Asumimos observaciones independientes (datos transversales).")
+
+    print("\n3. NORMALIDAD DE RESIDUOS:")
+    if hasattr(sh_res, 'pvalue'):
+        print(f"   • Shapiro-Wilk: W={sh_res.statistic:.4f}, p={sh_res.pvalue:.4f}")
+    else:
+        print("   • Shapiro-Wilk: no aplicable (n < 3)")
+    print(f"   • Media residuos: {data['residuos'].mean():.4f} (debe ≈ 0)")
+    print(f"   → {'✓ Residuos normales' if hasattr(sh_res, 'pvalue') and sh_res.pvalue > ALFA else '⚠ Residuos NO normales'}")
+
+    print("\n4. HOMOCEDASTICIDAD:")
+    print(f"   • Test de Levene: W={levene_stat:.4f}, p={levene_p:.4f}" if not np.isnan(levene_stat) else "   • Test de Levene: no aplicable")
+    print(f"   • Correlación |residuos| vs X: {corr_hetero:.4f}")
+    if (not np.isnan(levene_p) and levene_p > ALFA) and abs(corr_hetero) < 0.3:
+        print("   → ✓ Homocedasticidad cumplida")
+    elif (not np.isnan(levene_p) and levene_p <= ALFA):
+        print("   → ⚠ Posible heterocedasticidad detectada")
+    else:
+        print("   → ⚠ Revisar gráficamente - correlación moderada")
+
+    print("\n5. OUTLIERS:")
+    print(f"   • Outliers (|res_std| > 2.5): {len(outliers)}/{n} ({len(outliers)/n*100:.1f}%)")
+    if len(outliers) > 0:
+        for idx, row in outliers.iterrows():
+            # intentar mostrar nombre si existe
+            name = None
+            for col in df.columns:
+                if col.lower().startswith("rep") or col.lower().startswith("nombre") or col.lower().startswith("represent"):
+                    name = df.iloc[idx][col] if col in df.columns else None
+            print(f"     • idx={idx}, res_std={row['res_std']:.2f}" + (f", nombre={name}" if name is not None else ""))
+
+    # Intervalos de confianza y predicción (mostrar los ejemplos)
+    print("\n--- INTERVALOS DE CONFIANZA Y PREDICCIÓN (95%) ---")
+    print(f"{'X':<8} {'Ŷ':<10} {'IC Media':<25} {'IP Individual':<25}")
+    print("-" * 80)
+    for (x_val, y_pred, (ic_inf, ic_sup), (ip_inf, ip_sup)) in ic_pred_list:
+        print(f"{x_val:<8} {y_pred:<10.2f} [{ic_inf:.1f}, {ic_sup:.1f}] {'':>5} [{ip_inf:.1f}, {ip_sup:.1f}]")
+
+    # Recomendaciones de transformación (mismo criterio del ejemplo)
+    necesita = False
+    razones = []
+    if sh_x.pvalue <= ALFA or sh_y.pvalue <= ALFA:
+        razones.append("Variables originales no normales")
+        necesita = True
+    if hasattr(sh_res, 'pvalue') and sh_res.pvalue <= ALFA:
+        razones.append("Residuos no normales")
+        necesita = True
+    if (not np.isnan(levene_p) and levene_p <= ALFA) or abs(corr_hetero) >= 0.3:
+        razones.append("Posible heterocedasticidad")
+        necesita = True
+    if abs(pearson_r) < 0.5:
+        razones.append(f"Correlación débil (r={pearson_r:.3f})")
+        necesita = True
+    if len(outliers) > n * 0.15:
+        razones.append(f"Exceso de outliers ({len(outliers)})")
+        necesita = True
+
+    if necesita:
+        print("\n⚠ CONSIDERAR TRANSFORMACIÓN:")
+        for r in razones:
+            print(f"  • {r}")
+        print("\n  Transformaciones sugeridas:")
+        print("    - log(Y): reduce asimetría positiva, estabiliza varianza")
+        print("    - √Y: para datos de conteo con varianza proporcional a media")
+        print("    - Box-Cox: encontrar transformación óptima")
+    else:
+        print("\n✓ NO NECESARIA - Supuestos principales cumplidos adecuadamente")
+
+    # Resumen ejecutivo breve por punto
+    print("\n" + "="*70)
+    print("                        RESUMEN EJECUTIVO (breve)")
+    print("="*70)
+    print(f"Modelo: Ŷ = {b0:.2f} + {b1:.3f}X")
+    print(f"R² = {r2:.3f} ({r2*100:.1f}% variabilidad explicada)")
+    print(f"Pendiente: p = {p_val_t:.4f} | Modelo (ANOVA): p = {p_val_f:.6f}")
+    print(f"Outliers: {len(outliers)}/{n} | Homocedasticidad (Levene p) = {levene_p:.4f}" if not np.isnan(levene_p) else f"Outliers: {len(outliers)}/{n}")
+    print("="*70 + "\n\n")
+
+    # Retornar resumen básico por punto
+    return {
+        "etiqueta": etiqueta,
+        "n": n,
+        "b0": b0,
+        "b1": b1,
+        "R2": r2,
+        "p_b1": p_val_t,
+        "F": F_calc,
+        "p_F": p_val_f,
+        "levene_p": levene_p,
+        "outliers_count": len(outliers)
+    }
+
+# --- Ejecutar para puntos 1..9 ---
+resumen_global = []
+for punto in range(1, 10):
+    if punto not in sheets:
+        continue
+    print("\n" + "#"*100)
+    print(f"==================== INICIO PUNTO {punto} ====================")
+    print("#"*100 + "\n")
+    sheet = sheets[punto]
+    # Punto 4 puede ser dict con regiones
+    if punto == 4 and isinstance(sheet, dict):
+        for key, df_region in sheet.items():
+            etiqueta = f"PUNTO 4 - {key}"
+            try:
+                resumen = describir_y_ajustar(df_region.copy(), 'X', 'Y', etiqueta)
+                # Solo agregar al resumen global si el análisis se realizó con éxito (n >= 3)
+                if resumen and not np.isnan(resumen['R2']):
+                    resumen_global.append(resumen)
+            except Exception as e:
+                print(f"Error en {etiqueta}: {e}")
+        # además combinado
+        combined = pd.concat([sheet[k].assign(Region=k) for k in sheet.keys()], ignore_index=True)
+        try:
+            resumen = describir_y_ajustar(combined.copy(), 'X', 'Y', "PUNTO 4 - COMBINADO")
+            # Solo agregar al resumen global si el análisis se realizó con éxito (n >= 3)
+            if resumen and not np.isnan(resumen['R2']):
+                resumen_global.append(resumen)
+        except Exception as e:
+            print("Error en PUNTO 4 - COMBINADO:", e)
+    else:
+        # Determinar columnas X,Y autom.
+        dfp = sheet.copy()
+        num_cols = dfp.select_dtypes(include=[np.number]).columns.tolist()
+        if len(num_cols) >= 2:
+            xcol, ycol = num_cols[0], num_cols[1]
+        else:
+            # si no hay suficientes cols numéricas, intentar nombres comunes
+            if 'X' in dfp.columns and 'Y' in dfp.columns:
+                xcol, ycol = 'X', 'Y'
+            elif 'Distancia' in dfp.columns and 'Tarifa' in dfp.columns:
+                xcol, ycol = 'Distancia', 'Tarifa'
+            elif 'Llamadas' in dfp.columns and 'Copiadoras' in dfp.columns:
+                xcol, ycol = 'Llamadas', 'Copiadoras'
+            else:
+                # salto si no es posible
+                print(f"Punto {punto}: no se detectaron columnas numéricas válidas. Se omite.")
+                continue
+        etiqueta = f"PUNTO {punto}"
+        try:
+            resumen = describir_y_ajustar(dfp.copy(), xcol, ycol, etiqueta)
+            # Solo agregar al resumen global si el análisis se realizó con éxito (n >= 3)
+            if resumen and not np.isnan(resumen['R2']):
+                resumen_global.append(resumen)
+        except Exception as e:
+            print(f"Error en {etiqueta}: {e}")
+
+# Fin
+print("\n=== ANÁLISIS COMPLETO PARA TODOS LOS PUNTOS FINALIZADO ===")
